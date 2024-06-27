@@ -4,7 +4,8 @@ version = "1.0.0"
 authors = []
 
 [addresses]
-myAddress = "0x1"
+myAddress = "0x122"
+source_addr = "0xcafe"
 [dev-addresses]
 
 [dependencies.AptosFramework]
@@ -12,4 +13,7 @@ git = "https://github.com/aptos-labs/aptos-core.git"
 rev = "mainnet"
 subdir = "aptos-move/framework/aptos-framework"
 
-[dev-dependencies]
+[dependencies.AptosToken]
+git = "https://github.com/aptos-labs/aptos-core.git"
+rev = "mainnet"
+subdir = "aptos-move/framework/aptos-token"
