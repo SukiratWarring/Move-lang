@@ -8,11 +8,21 @@ module myAddress::Resource_account{
     use aptos_token::token::{TokenId,TokenDataId};
     use aptos_framework::account::{Self,SignerCapability};
     use aptos_framework::resource_account;
+    use aptos_framework::timestamp;
+    use std::debug::print;
+    use std::error;
+
+    //Error codes
+    const E_NOT_AUTH:u64=0;
+    const E_MINT_NOT_ENABLED:u64=1;
+    const E_PERIOD_EXPIRED:u64=2;
     // This struct stores an NFT collection's relevant information
     struct ModuleData has key {
         // Storing the signer capability here, so the module can programmatically sign for transactions
         signer_cap: SignerCapability,
         token_data_id: TokenDataId,
+        expiration_time:u64,
+        minting_enabled:bool
     } 
 
     fun init_module(resource_signer: &signer) {
@@ -66,12 +76,16 @@ module myAddress::Resource_account{
         move_to(resource_signer, ModuleData {
             signer_cap: resource_signer_cap,
             token_data_id,
+            expiration_time: 10000000000,
+            minting_enabled: false,
         });
     }
 
     public fun mint(receiver:&signer)acquires ModuleData{
         //Fetching the data stored at the contract
         let module_data=borrow_global_mut<ModuleData>(@myAddress);
+        assert!(module_data.minting_enabled==true,error::internal(E_MINT_NOT_ENABLED));
+        assert!(module_data.expiration_time>=timestamp::now_seconds(),error::internal(E_PERIOD_EXPIRED));
         // Creating the signer from the stored singer cap
         let resource_signer=account::create_signer_with_capability(&module_data.signer_cap);
         //Tokenid of the minted token
@@ -100,6 +114,19 @@ module myAddress::Resource_account{
         
 
     }
+    public fun enable_mint(account:&signer)acquires ModuleData{
+        assert!(signer::address_of(account)==@auth_acc,0);
+        let module_data=borrow_global_mut<ModuleData>(signer::address_of(account));
+        module_data.minting_enabled=true;
+
+    }
+
+    public fun change_exp_time(account:&signer,newTime:u64)acquires ModuleData{
+        assert!(signer::address_of(account)==@auth_acc,0);
+        let module_data=borrow_global_mut<ModuleData>(signer::address_of(account));
+        module_data.expiration_time=newTime;
+
+    }    
     #[view]
     public fun get_tokenId():TokenId acquires ModuleData{
         let module_data=borrow_global_mut<ModuleData>(@myAddress);

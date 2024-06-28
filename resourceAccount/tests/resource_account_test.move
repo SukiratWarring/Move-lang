@@ -22,15 +22,20 @@ module myAddress::res_acc_tests{
         res_acc = @0xc3bb8488ab1a5815a9d543d7e41b0e0df46a7396f89b22821f07a4362f75ddc5,
         origin_acc = @0xcafe,
         nft_rec_acc = @0x123,
+        auth_account= @0x23123,
     )]
-    public entry fun test_setup_and_mint(res_acc:signer,origin_acc:signer,nft_rec_acc:signer){
+    #[expected_failure]
+    public entry fun test_setup_and_mint(res_acc:signer,origin_acc:signer,nft_rec_acc:signer,auth_account:signer){
         setup_test_environment(&res_acc,origin_acc,&nft_rec_acc);
         Resource_account::mint(&nft_rec_acc);
 
         let token_id=Resource_account::get_tokenId();
         let amt=token::balance_of(signer::address_of(&nft_rec_acc), token_id);
-
-        assert!(amt==1,0);
         print<u64>(&amt);
+        assert!(amt==1,0);
+
+        
+
+
     }
 }
