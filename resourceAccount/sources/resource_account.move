@@ -3,9 +3,10 @@ module myAddress::Resource_account{
 
     use aptos_token::token;
     use std::signer;
+    use std::vector;
     use std::string::String;
-    use aptos_token::token::TokenDataId;
-    use aptos_framework::account::SignerCapability;
+    use aptos_token::token::{TokenId,TokenDataId};
+    use aptos_framework::account::{Self,SignerCapability};
     use aptos_framework::resource_account;
     // This struct stores an NFT collection's relevant information
     struct ModuleData has key {
@@ -67,9 +68,56 @@ module myAddress::Resource_account{
             token_data_id,
         });
     }
+
+    public fun mint(receiver:&signer)acquires ModuleData{
+        //Fetching the data stored at the contract
+        let module_data=borrow_global_mut<ModuleData>(@myAddress);
+        // Creating the signer from the stored singer cap
+        let resource_signer=account::create_signer_with_capability(&module_data.signer_cap);
+        //Tokenid of the minted token
+        let tokenId=token::mint_token(&resource_signer,module_data.token_data_id,1);
+        //Sending it to the receiver
+        token::direct_transfer(&resource_signer,receiver,tokenId,1);
+        
+        //Fetching all details for the collection from the token_data_id
+        let (creator_address, collection, name)=token::get_token_data_id_fields(&module_data.token_data_id);        
+        // Mutate the token properties to update the property version of this token.
+        // Note that here we are re-using the same token data id and only updating the property version.
+        // This is because we are simply printing edition of the same token, instead of creating unique
+        // tokens. The tokens created this way will have the same token data id, but different property versions.        
+        token::mutate_token_properties(
+            &resource_signer,
+            signer::address_of(receiver),
+            creator_address,
+            collection,
+            name,
+            0,
+            1,
+            vector::empty<String>(),
+            vector::empty<vector<u8>>(),
+            vector::empty<String>(),
+        );
+        
+
+    }
+    #[view]
+    public fun get_tokenId():TokenId acquires ModuleData{
+        let module_data=borrow_global_mut<ModuleData>(@myAddress);
+        let resource_signer = account::create_signer_with_capability(&module_data.signer_cap);
+        let resource_signer_addr = signer::address_of(&resource_signer);
+        let token_id = token::create_token_id_raw(
+            resource_signer_addr,
+            string::utf8(b"Collection name"),
+            string::utf8(b"Token name"),
+            1
+        );      
+        token_id  
+    }
+
     #[test_only]
-    public fun init_test(acc:&signer){
+    public fun init_test(acc:&signer,nft_rec_acc:&signer)acquires ModuleData{
         init_module(acc);
+        mint(nft_rec_acc);
     } 
 
 }
