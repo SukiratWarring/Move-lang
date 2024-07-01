@@ -9,21 +9,28 @@ module myAddress::Resource_account{
     use aptos_framework::account::{Self,SignerCapability};
     use aptos_framework::resource_account;
     use aptos_framework::timestamp;
-    use std::debug::print;
     use std::error;
+    use aptos_std::ed25519;
 
     //Error codes
     const E_NOT_AUTH:u64=0;
     const E_MINT_NOT_ENABLED:u64=1;
     const E_PERIOD_EXPIRED:u64=2;
+    const E_INVALID_PROOF_OF_KNOWLEDGE:u64=3;
     // This struct stores an NFT collection's relevant information
     struct ModuleData has key {
-        // Storing the signer capability here, so the module can programmatically sign for transactions
+        public_key: ed25519::ValidatedPublicKey,
         signer_cap: SignerCapability,
         token_data_id: TokenDataId,
         expiration_time:u64,
         minting_enabled:bool
     } 
+
+    struct MintProofChallenge has drop {
+        receiver_account_sequence_number: u64,
+        receiver_account_address: address,
+        token_data_id: TokenDataId,
+    }
 
     fun init_module(resource_signer: &signer) {
         let collection_name = string::utf8(b"Collection name");
@@ -70,10 +77,12 @@ module myAddress::Resource_account{
         // we rotate th resource account's authentication key to 0 and give up our control over the resource account. Before calling this function,
         // the resource account has the same authentication key as the source account so we had control over the resource account.
         let resource_signer_cap = resource_account::retrieve_resource_account_cap(resource_signer,@source_addr);
-
+        let public_key_bytes=x"f66bf0ce5ceb582b93d6780820c2025b9967aedaa259bdbb9f3d0297eced0e18";
+        let public_key = std::option::extract(&mut ed25519::new_validated_public_key_from_bytes(public_key_bytes));
         // Store the token data id and the resource account's signer capability within the module, so we can programmatically
         // sign for transactions in the `mint_event_ticket()` function.
         move_to(resource_signer, ModuleData {
+            public_key,
             signer_cap: resource_signer_cap,
             token_data_id,
             expiration_time: 10000000000,
@@ -81,7 +90,7 @@ module myAddress::Resource_account{
         });
     }
 
-    public fun mint(receiver:&signer)acquires ModuleData{
+    public fun mint(receiver:&signer,mint_proof_signature:vector<u8>)acquires ModuleData{
         //Fetching the data stored at the contract
         let module_data=borrow_global_mut<ModuleData>(@myAddress);
         assert!(module_data.minting_enabled==true,error::internal(E_MINT_NOT_ENABLED));
@@ -90,9 +99,10 @@ module myAddress::Resource_account{
         let resource_signer=account::create_signer_with_capability(&module_data.signer_cap);
         //Tokenid of the minted token
         let tokenId=token::mint_token(&resource_signer,module_data.token_data_id,1);
+        //Verification 
+        verify_proof(signer::address_of(receiver),mint_proof_signature,module_data.token_data_id,module_data.public_key);
         //Sending it to the receiver
         token::direct_transfer(&resource_signer,receiver,tokenId,1);
-        
         //Fetching all details for the collection from the token_data_id
         let (creator_address, collection, name)=token::get_token_data_id_fields(&module_data.token_data_id);        
         // Mutate the token properties to update the property version of this token.
@@ -116,17 +126,50 @@ module myAddress::Resource_account{
     }
     public fun enable_mint(account:&signer)acquires ModuleData{
         assert!(signer::address_of(account)==@auth_acc,0);
-        let module_data=borrow_global_mut<ModuleData>(signer::address_of(account));
+        let module_data=borrow_global_mut<ModuleData>(@myAddress);
         module_data.minting_enabled=true;
 
     }
 
     public fun change_exp_time(account:&signer,newTime:u64)acquires ModuleData{
         assert!(signer::address_of(account)==@auth_acc,0);
-        let module_data=borrow_global_mut<ModuleData>(signer::address_of(account));
+        let module_data=borrow_global_mut<ModuleData>(@myAddress);
         module_data.expiration_time=newTime;
-
     }    
+
+    fun verify_proof(receiver_account_address: address,mint_proof_signature: vector<u8>,token_data_id: TokenDataId,public_key: ed25519::ValidatedPublicKey){
+        let receiver_account_sequence_number=account::get_sequence_number(receiver_account_address);
+        let proof_challenge=MintProofChallenge{
+            receiver_account_sequence_number,
+            receiver_account_address,
+            token_data_id
+        };
+        let signature=ed25519::new_signature_from_bytes(mint_proof_signature);
+        let unvalidated_public_key=ed25519::public_key_to_unvalidated(&public_key);
+
+        assert!(ed25519::signature_verify_strict_t(&signature,&unvalidated_public_key,proof_challenge),error::invalid_argument(E_INVALID_PROOF_OF_KNOWLEDGE));
+    }
+
+    public entry fun set_public_key(account:&signer,new_pk:vector<u8>)acquires ModuleData{
+        assert!(signer::address_of(account)==@auth_acc,error::permission_denied(E_NOT_AUTH));
+        let module_data=borrow_global_mut<ModuleData>(@myAddress);
+        module_data.public_key=std::option::extract(&mut ed25519::new_validated_public_key_from_bytes(new_pk));
+    } 
+
+    #[view]
+    public fun get_module_data_token_id():TokenDataId acquires ModuleData{
+        borrow_global<ModuleData>(@myAddress).token_data_id
+    }
+
+    public fun create_proof(nft_rec_acc:&signer):MintProofChallenge acquires ModuleData{
+        let proof=MintProofChallenge{
+            receiver_account_sequence_number:account::get_sequence_number(signer::address_of(nft_rec_acc)),
+            receiver_account_address:signer::address_of(nft_rec_acc),
+            token_data_id:get_module_data_token_id()
+        };
+        proof
+    }
+
     #[view]
     public fun get_tokenId():TokenId acquires ModuleData{
         let module_data=borrow_global_mut<ModuleData>(@myAddress);
@@ -142,9 +185,8 @@ module myAddress::Resource_account{
     }
 
     #[test_only]
-    public fun init_test(acc:&signer,nft_rec_acc:&signer)acquires ModuleData{
+    public fun init_test(acc:&signer){
         init_module(acc);
-        mint(nft_rec_acc);
     } 
 
 }
