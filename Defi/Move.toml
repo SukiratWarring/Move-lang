@@ -5,6 +5,7 @@ authors = []
 
 [addresses]
 myAddress = "0x9988"
+aptos_framework = "0x1"
 [dev-addresses]
 
 [dependencies.AptosFramework]
