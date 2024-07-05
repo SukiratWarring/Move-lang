@@ -6,6 +6,9 @@ module myAddress::LockContract{
     use std::error;
     use std::timestamp;
     use aptos_framework::coin;
+    use aptos_framework::aptos_coin::AptosCoin;
+    use std::string;
+    use aptos_framework::account;
 
     const E_NOT_INITIALISED:u64=0;
     struct LockDetails has store,copy,drop{
@@ -43,7 +46,7 @@ module myAddress::LockContract{
         });
     }
 
-    fun calcualte_rewards<CoinType>(account:&signer):u64 acquires Address_to_lock{
+    public fun calcualte_rewards<CoinType>(account:&signer):u64 acquires Address_to_lock{
         //get all locks
         let address_to_check =  borrow_global_mut<Address_to_lock<CoinType>>(signer::address_of(account));
         let all_locks=table::borrow_mut(&mut address_to_check.all_locks, signer::address_of(account));
@@ -61,6 +64,18 @@ module myAddress::LockContract{
 
     }
 
+    public fun batchLock<CoinType>(account:&signer,batchLocks:vector<LockDetails>) acquires Address_to_lock{
+        let lock_addr=signer::address_of(account);
+        assert!(exists<Address_to_lock<CoinType>>(lock_addr),error::internal(E_NOT_INITIALISED));
+        //Get the vector
+        let access_storage=borrow_global_mut<Address_to_lock<CoinType>>(lock_addr);
+        let allLocks=table::borrow_mut(&mut access_storage.all_locks,lock_addr);
+        //Add the locks
+        vector::append(allLocks,batchLocks);
+
+        print<vector<LockDetails>>(allLocks);
+    }
+
     public fun distributeFunds<CoinType>(account:&signer)acquires Address_to_lock{
         let addr=signer::address_of(account);
         let rewards=calcualte_rewards<CoinType>(account);
@@ -73,6 +88,53 @@ module myAddress::LockContract{
 
     }
 
+    #[test_only]
+    fun setup_enviroment(test_acc:&signer){
+        timestamp::set_time_has_started_for_testing(test_acc);
+        account::create_account_for_test(signer::address_of(test_acc));
+        init<AptosCoin>(test_acc);
+        let (burn_cap, freeze_cap, mint_cap) = coin::initialize<AptosCoin>(
+            test_acc,
+            string::utf8(b"TestCoin"),
+            string::utf8(b"TC"),
+            8,
+            false,
+        );
+        coin::register<AptosCoin>(test_acc);
+        let coins =coin::mint<AptosCoin>(20000,&mint_cap);
+        coin::deposit(signer::address_of(test_acc), coins);
+        coin::destroy_mint_cap(mint_cap);
+        coin::destroy_freeze_cap(freeze_cap);        
+        coin::destroy_burn_cap(burn_cap);        
+    }
+    
+    #[test(test_acc=@aptos_framework)]
+    public entry fun create_lock(test_acc:&signer)acquires Address_to_lock{
+        setup_enviroment(test_acc);
+        lock<AptosCoin>(test_acc,20000,20000);
+        timestamp::fast_forward_seconds(30000);
+        //check the lock
+        let check_all_locks=getAllLocks<AptosCoin>(test_acc);
+        assert!(vector::length(&check_all_locks)==1,0);
+        let total_rewards=calcualte_rewards<AptosCoin>(test_acc);
+        print(&total_rewards);
+    }
 
+    #[test(test_acc=@aptos_framework)]
+    public entry fun test_batch(test_acc:&signer) acquires Address_to_lock{
+        setup_enviroment(test_acc);
+        lock<AptosCoin>(test_acc,20000,20000);
+        timestamp::fast_forward_seconds(30000);
+        //Create the batch locally for test
+        let batch=vector::empty<LockDetails>();
+        vector::push_back(&mut batch,LockDetails{coins:23,unlock_time_sec:2000});
+        vector::push_back(&mut batch,LockDetails{coins:66,unlock_time_sec:43545});
+        print<vector<LockDetails>>(&batch);
+        batchLock<AptosCoin>(test_acc,batch);
+        //Check the lock
+        let check_all_locks=getAllLocks<AptosCoin>(test_acc);
+        assert!(vector::length(&check_all_locks)==3,0);
+
+    }
 
 }

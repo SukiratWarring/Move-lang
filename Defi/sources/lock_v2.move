@@ -52,9 +52,11 @@ module myAddress::Lock_V2{
             coins:amt,
             unlock_time_sec:unlock_time,
         });
+        coin::transfer<CoinType>(account,source,amt);
+
     }
 
-    fun calcualte_rewards<CoinType>(account:&signer,source:address):u64 acquires Lock_resource{
+    fun update_rewards<CoinType>(account:&signer,source:address):u64 acquires Lock_resource{
         //get all locks
         let lock_res =  borrow_global_mut<Lock_resource<CoinType>>(source);
         let all_locks=table::borrow_mut(&mut lock_res.all_locks, signer::address_of(account));
@@ -86,7 +88,7 @@ module myAddress::Lock_V2{
 
     // public fun distributeFunds<CoinType>(account:&signer)acquires Lock_resource{
     //     let addr=signer::address_of(account);
-    //     let rewards=calcualte_rewards<CoinType>(account);
+    //     let rewards=update_rewards<CoinType>(account);
     //     coin::transfer<CoinType>(account,addr, rewards);
     // }
 
@@ -103,7 +105,6 @@ module myAddress::Lock_V2{
         let seed = x"01";        
         // create a resource account from the origin account, mocking the module publishing process
         // resource_account::create_resource_account(source_acc, vector::empty<u8>(), vector::empty<u8>());
-        init<AptosCoin>(source_acc,seed);
         let (burn_cap, freeze_cap, mint_cap) = coin::initialize<AptosCoin>(
             test_acc,
             string::utf8(b"TestCoin"),
@@ -112,7 +113,10 @@ module myAddress::Lock_V2{
             false,
         );
         coin::register<AptosCoin>(test_acc);
+        coin::register<AptosCoin>(source_acc);
         let coins =coin::mint<AptosCoin>(20000,&mint_cap);
+        init<AptosCoin>(source_acc,seed);
+
         coin::deposit(signer::address_of(test_acc), coins);
         coin::destroy_mint_cap(mint_cap);
         coin::destroy_freeze_cap(freeze_cap);        
@@ -127,7 +131,7 @@ module myAddress::Lock_V2{
         //check the lock
         let check_all_locks=getAllLocks<AptosCoin>(test_acc,signer::address_of(source_acc));
         assert!(vector::length(&check_all_locks)==1,0);
-        let total_rewards=calcualte_rewards<AptosCoin>(test_acc,signer::address_of(source_acc));
+        let total_rewards=update_rewards<AptosCoin>(test_acc,signer::address_of(source_acc));
         print(&total_rewards);
     }
 
