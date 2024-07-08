@@ -16,8 +16,8 @@ module myAddress::Lock_V2{
         unlock_time_sec:u64
     }
     
-
-
+    #[test_only]
+    struct Warin has key{}
     struct Lock_resource<phantom CoinType> has key{
         all_locks:Table<address, vector<LockDetails>>,
         resource_signer_cap: account::SignerCapability,
@@ -56,21 +56,22 @@ module myAddress::Lock_V2{
 
     }
 
-    fun update_rewards<CoinType>(account:&signer,source:address):u64 acquires Lock_resource{
+    fun update_rewards<CoinType>(account:&signer,source:address):(u64, u64) acquires Lock_resource{
         //get all locks
         let lock_res =  borrow_global_mut<Lock_resource<CoinType>>(source);
         let all_locks=table::borrow_mut(&mut lock_res.all_locks, signer::address_of(account));
         let total_rewards=0;
+        let total_unLocks_staked_token=0;
         vector::for_each_mut<LockDetails>(all_locks,|each_lock|{
             let lock:&mut LockDetails=each_lock;
             if(timestamp::now_seconds()>=lock.unlock_time_sec){
+            total_unLocks_staked_token=total_unLocks_staked_token+lock.coins;
             let diffTime=timestamp::now_seconds()-lock.unlock_time_sec;
             let reward=lock.coins * diffTime;
             total_rewards=reward+total_rewards;
-            print<LockDetails>(lock);
             } 
         });
-        total_rewards
+        (total_rewards,total_unLocks_staked_token)
 
     }
 
@@ -82,15 +83,24 @@ module myAddress::Lock_V2{
         let allLocks=table::borrow_mut(&mut access_storage.all_locks,lock_addr);
         //Add the locks
         vector::append(allLocks,batchLocks);
-
-        print<vector<LockDetails>>(allLocks);
+        //Transfer the coins
+        let sum=0;
+        vector::for_each<LockDetails>(batchLocks,|each_lock|{
+            let lock:LockDetails=each_lock;
+            sum=sum+lock.coins;
+        }
+        );
+        coin::transfer<CoinType>(account,source,sum);
     }
 
-    // public fun distributeFunds<CoinType>(account:&signer)acquires Lock_resource{
-    //     let addr=signer::address_of(account);
-    //     let rewards=update_rewards<CoinType>(account);
-    //     coin::transfer<CoinType>(account,addr, rewards);
-    // }
+    public fun distributeFunds<CoinType,RewardType>(source_acc:&signer,to:&signer)acquires Lock_resource{
+        // let staked_amt=
+        let (rewards,unlock_staked)=update_rewards<CoinType>(to,signer::address_of(source_acc));
+        print(&rewards);
+        coin::transfer<CoinType>(source_acc,signer::address_of(to),unlock_staked);
+        //Transfer Reward Token
+        coin::transfer<RewardType>(source_acc,signer::address_of(to),rewards);
+    }
 
     public fun getAllLocks<CoinType>(account:&signer,source:address):vector<LockDetails> acquires Lock_resource{
         let address_to_check =  borrow_global<Lock_resource<CoinType>>(source);
@@ -103,10 +113,9 @@ module myAddress::Lock_V2{
         account::create_account_for_test(signer::address_of(test_acc));
         account::create_account_for_test(signer::address_of(source_acc));
         let seed = x"01";        
-        // create a resource account from the origin account, mocking the module publishing process
-        // resource_account::create_resource_account(source_acc, vector::empty<u8>(), vector::empty<u8>());
+
         let (burn_cap, freeze_cap, mint_cap) = coin::initialize<AptosCoin>(
-            test_acc,
+            test_acc,//0x1
             string::utf8(b"TestCoin"),
             string::utf8(b"TC"),
             8,
@@ -114,13 +123,30 @@ module myAddress::Lock_V2{
         );
         coin::register<AptosCoin>(test_acc);
         coin::register<AptosCoin>(source_acc);
-        let coins =coin::mint<AptosCoin>(20000,&mint_cap);
+        let coins =coin::mint<AptosCoin>(20000000,&mint_cap);
         init<AptosCoin>(source_acc,seed);
 
         coin::deposit(signer::address_of(test_acc), coins);
         coin::destroy_mint_cap(mint_cap);
         coin::destroy_freeze_cap(freeze_cap);        
-        coin::destroy_burn_cap(burn_cap);        
+        coin::destroy_burn_cap(burn_cap);    
+
+        //Reward Coin
+        let (burn_cap_1, freeze_cap_1, mint_cap_1) = coin::initialize<Warin>(
+            test_acc,
+            string::utf8(b"RewardCoin"),
+            string::utf8(b"RC"),
+            8,
+            false,
+        );
+        coin::register<Warin>(test_acc);
+        coin::register<Warin>(source_acc);
+        //202_617_400
+        let coins =coin::mint<Warin>(500_000_000,&mint_cap_1);      
+        coin::deposit(signer::address_of(source_acc), coins);  
+        coin::destroy_mint_cap(mint_cap_1);
+        coin::destroy_freeze_cap(freeze_cap_1);        
+        coin::destroy_burn_cap(burn_cap_1);   
     }
     
     #[test(test_acc=@aptos_framework,source_acc=@source_acc)]
@@ -131,8 +157,8 @@ module myAddress::Lock_V2{
         //check the lock
         let check_all_locks=getAllLocks<AptosCoin>(test_acc,signer::address_of(source_acc));
         assert!(vector::length(&check_all_locks)==1,0);
-        let total_rewards=update_rewards<AptosCoin>(test_acc,signer::address_of(source_acc));
-        print(&total_rewards);
+        update_rewards<AptosCoin>(test_acc,signer::address_of(source_acc));
+
     }
 
     #[test(test_acc=@aptos_framework,source_acc=@source_acc)]
@@ -143,13 +169,17 @@ module myAddress::Lock_V2{
         //Create the batch locally for test
         let batch=vector::empty<LockDetails>();
         vector::push_back(&mut batch,LockDetails{coins:23,unlock_time_sec:2000});
-        vector::push_back(&mut batch,LockDetails{coins:66,unlock_time_sec:43545});
-        print<vector<LockDetails>>(&batch);
+        vector::push_back(&mut batch,LockDetails{coins:66,unlock_time_sec:100});
         batchLock<AptosCoin>(test_acc,batch,signer::address_of(source_acc));
         //Check the lock
         let check_all_locks=getAllLocks<AptosCoin>(test_acc,signer::address_of(source_acc));
         assert!(vector::length(&check_all_locks)==3,0);
-
+        // let reward_balance=coin::balance<Warin>(signer::address_of(source_acc));
+        // print(&std::string::utf8(b"AAAA"));
+        // print(&reward_balance);
+        distributeFunds<AptosCoin,Warin>(source_acc,test_acc);
+        assert!(coin::balance<AptosCoin>(signer::address_of(test_acc))==20000000,0);
+        assert!(coin::balance<Warin>(signer::address_of(test_acc))==202617400,0);
     }
 
 }
