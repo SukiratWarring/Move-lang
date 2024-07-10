@@ -1,2 +1,2 @@
-Visual Representation for the Contract.
+# **Visual Representation for the Contract.**
 ![!alt ](assets/Dao.png)
