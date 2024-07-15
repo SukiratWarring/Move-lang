@@ -48,7 +48,6 @@ module myAddress::DaoContract{
     struct ProposalStatus has key,store{
         NotActive:bool,
         Active:bool,
-        Expired:bool,
         Completed:bool,
 
     }
@@ -68,6 +67,9 @@ module myAddress::DaoContract{
     const E_PROPOSAL_NOT_STARTED:u64=5;
     const E_INVALID_COIN_TYPE:u64=6;
     const E_THRESHOLD_NOT_MET:u64=7;
+    const E_PROPOSAL_ALREADY_STARTED:u64=8;
+    const E_NOT_CORRECT_TIME_WINDOW:u64=9;
+    const E_ADDRESS_NOT_REGISTERED:u64=10;
 
     public fun create_dao_contract(
         dao_creator:&signer,
@@ -151,7 +153,6 @@ module myAddress::DaoContract{
             status:ProposalStatus{
                 NotActive:true,
                 Active:false,
-                Expired:false,
                 Completed:false,
             },
             stats:ProposalStats{
@@ -182,19 +183,65 @@ module myAddress::DaoContract{
         assert!(length>0,E_NO_PROPOSALS);      
         assert!(dao.next_proposal_id>proposal_id,E_INVALID_PROPOSAL_Id);
         //checks the status
-        assert!(proposal.status.Active && !proposal.status.Completed,E_PROPOSAL_NOT_STARTED);
+        assert!(proposal.status.Active ,E_PROPOSAL_NOT_STARTED);
+        assert!(proposal.voting_start_time<timestamp::now_seconds() && proposal.voting_end_time>timestamp::now_seconds(),E_NOT_CORRECT_TIME_WINDOW);
+        //check if the account is registered
+        assert!(coin::is_account_registered<CoinType>(addr),E_ADDRESS_NOT_REGISTERED);
         //checks the governance token balance
         let governance_token_balance=coin::balance<CoinType>(addr);
         assert!(governance_token_balance>dao.governance_token.threshhold,E_THRESHOLD_NOT_MET);
         voteProposalInternal(proposal,voteCount,voteType,addr);
+    }
 
 
-        // total_yes:u64,
-        // total_no:u64,
-        // add_to_yes_vote:Table<address,u64>,
-        // add_to_no_vote:Table<address,u64>,
+    public fun executeProposal(account:&signer,dao_contract_address:address,proposal_id:u64) acquires DaoStruct,AllProposals{
+        assert!(exists<DaoStruct>(dao_contract_address),E_DAO_CONTRACT_NOT_EXIST);
+        let dao_contract=borrow_global<DaoStruct>(dao_contract_address);
+        let addr=signer::address_of(account);
+        let proposals=borrow_global_mut<AllProposals>(dao_contract_address);
+        let proposal=vector::borrow_mut<Proposal>(&mut proposals.all_proposals,proposal_id);
+        assert!(proposal.voting_end_time<timestamp::now_seconds(),E_NOT_CORRECT_TIME_WINDOW);
+        assert!(proposal.status.Active,E_PROPOSAL_NOT_STARTED);
+        assert!(dao_contract.admin==addr,E_ONLY_ADMIN);
+        
+        let proposals=borrow_global<AllProposals>(dao_contract_address);
+        let length=vector::length(&(proposals.all_proposals));
+        assert!(length>0,E_NO_PROPOSALS);
+
 
     }
+
+    //ONLY ADMIN     
+    public fun startProposal(account:&signer,dao_contract_address:address,proposal_id:u64) acquires DaoStruct,AllProposals{
+        assert!(exists<DaoStruct>(dao_contract_address),E_DAO_CONTRACT_NOT_EXIST);
+        let addr=signer::address_of(account);
+        let dao=(borrow_global<DaoStruct>(dao_contract_address));
+        assert!(addr==dao.admin,E_ONLY_ADMIN);
+        let proposals=borrow_global_mut<AllProposals>(dao_contract_address);
+        assert!(dao.next_proposal_id>proposal_id,E_INVALID_PROPOSAL_Id);
+        let proposal=vector::borrow_mut<Proposal>(&mut proposals.all_proposals,proposal_id);
+        assert!(proposal.voting_start_time<timestamp::now_seconds() && proposal.voting_end_time>timestamp::now_seconds(),E_NOT_CORRECT_TIME_WINDOW);
+        assert!(proposal.status.NotActive,E_PROPOSAL_ALREADY_STARTED);
+        proposal.status.Active=true;
+
+    }
+
+    public fun stopProposal(account:&signer,dao_contract_address:address,proposal_id:u64)acquires DaoStruct,AllProposals{
+        assert!(exists<DaoStruct>(dao_contract_address),E_DAO_CONTRACT_NOT_EXIST);
+        let addr=signer::address_of(account);
+        let dao=borrow_global<DaoStruct>(dao_contract_address);
+        assert!(addr==dao.admin,E_ONLY_ADMIN);
+        let proposals=borrow_global_mut<AllProposals>(dao_contract_address);
+        assert!(dao.next_proposal_id>proposal_id,E_INVALID_PROPOSAL_Id);
+        let proposal=vector::borrow_mut<Proposal>(&mut proposals.all_proposals,proposal_id);
+        assert!(proposal.voting_start_time<timestamp::now_seconds() && proposal.voting_end_time>timestamp::now_seconds(),E_NOT_CORRECT_TIME_WINDOW);
+        assert!(proposal.status.NotActive,E_PROPOSAL_ALREADY_STARTED);
+        proposal.status.Active=true;
+
+    }    
+
+
+    //INTERNAL FUNCTIONS
     fun voteProposalInternal(proposal:&mut Proposal,voteCount:u64,voteType:bool,addr:address){
         if(voteType){
             let isPresent=table::contains(&proposal.stats.add_to_yes_vote,addr);
@@ -231,20 +278,8 @@ module myAddress::DaoContract{
             }          
         }
 
-
     }
-
-    public fun executeProposal(account:&signer,dao_contract_address:address) acquires DaoStruct,AllProposals{
-        assert!(exists<DaoStruct>(dao_contract_address),E_DAO_CONTRACT_NOT_EXIST);
-        let dao_contract=borrow_global<DaoStruct>(dao_contract_address);
-        let addr=signer::address_of(account);
-        assert!(dao_contract.admin==addr,E_ONLY_ADMIN);
-        let proposals=borrow_global<AllProposals>(dao_contract_address);
-        let length=vector::length(&(proposals.all_proposals));
-        assert!(length>0,E_NO_PROPOSALS);
-
-    }
-
+    
     fun checkFunctionForCreateProposal(
         function_name:String,
         map:PropertyMap
@@ -263,8 +298,6 @@ module myAddress::DaoContract{
         }
 
     }
-
-    // public fun checkValues(value:)
 
 
 }
