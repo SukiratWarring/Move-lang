@@ -1,6 +1,6 @@
 module myAddress::DaoContract{
     use std::signer;
-    // use aptos_framework::coin;
+    use aptos_framework::coin;
     use std::vector;
     use aptos_std::table::{Self,Table};
     use std::string::{Self,String};
@@ -10,6 +10,7 @@ module myAddress::DaoContract{
     use std::bcs;
     use aptos_token::property_map::PropertyMap;
     use aptos_token::property_map;    
+
     struct DaoStruct has key{
         name: String,
         resolve_threshold: u64,
@@ -19,12 +20,12 @@ module myAddress::DaoContract{
         next_proposal_id: u64,
         dao_signer_capability: account::SignerCapability,
         admin: address,
-
     }
 
     struct GovernanceToken has store,drop{
         creator: address,
         collection: String,
+        threshhold:u64,
     }
 
     struct AllProposals has key,store{
@@ -61,8 +62,12 @@ module myAddress::DaoContract{
 
     const E_DAO_CONTRACT_NOT_EXIST:u64=0;
     const E_INVALID_TIMESTAMP:u64=1;
-
-
+    const E_ONLY_ADMIN:u64=2;
+    const E_NO_PROPOSALS:u64=3;
+    const E_INVALID_PROPOSAL_Id:u64=4;
+    const E_PROPOSAL_NOT_STARTED:u64=5;
+    const E_INVALID_COIN_TYPE:u64=6;
+    const E_THRESHOLD_NOT_MET:u64=7;
 
     public fun create_dao_contract(
         dao_creator:&signer,
@@ -72,6 +77,7 @@ module myAddress::DaoContract{
         governance_token_collection_name:String,
         voting_duration: u64,
         min_voting_power:u64,
+        threshhold:u64,
         ):address{
             let seed=bcs::to_bytes(&name);
             let dao_creator_addr=signer::address_of(dao_creator);
@@ -83,7 +89,8 @@ module myAddress::DaoContract{
                 resolve_threshold:resolve_threshold,
                 governance_token:GovernanceToken{
                     creator:governance_token_creator,
-                    collection:governance_token_collection_name
+                    collection:governance_token_collection_name,
+                    threshhold:threshhold
                 },
                 voting_duration:voting_duration,
                 min_required_proposer_voting_power:min_voting_power,
@@ -116,9 +123,9 @@ module myAddress::DaoContract{
         name:String,
         description:String,
         function_name: String,// 3 types of functions are supported: (1) "offer_nft", (2) "transfer_fund"
-        arg_names: vector<String>,// name of the arguments of the function to be called. The arg here should be the same as the argument used in the function
-        arg_values: vector<vector<u8>>,// bcs serailized values of argument values
-        arg_types:vector<String>,// types of arguments. currently, we only support string, u8, u64, u128, bool, address.
+        arg_names: vector<String>,
+        arg_values: vector<vector<u8>>,
+        arg_types:vector<String>, 
         voting_start_time:u64,
         voting_end_time:u64,
     ) acquires DaoStruct,AllProposals{
@@ -126,14 +133,14 @@ module myAddress::DaoContract{
         // Check the timestamp is from future and is greater than end time
         assert!(voting_start_time > voting_end_time && voting_start_time>timestamp::now_seconds(),E_INVALID_TIMESTAMP);
         let prop_map=property_map::new(arg_names,arg_values,arg_types);
-        checkFunction(function_name,prop_map);
+        checkFunctionForCreateProposal(function_name,prop_map);
 
         let account_addr=signer::address_of(account);
         let dao_contract=borrow_global_mut<DaoStruct>(dao_contract_address);
 
         let proposals=borrow_global_mut<AllProposals>(dao_contract_address);
         let vec=&mut proposals.all_proposals;
-        vector::push_back( vec,Proposal{
+        vector::push_back(vec,Proposal{
             name:name,
             description:description,
             function_name:function_name,
@@ -157,7 +164,88 @@ module myAddress::DaoContract{
         
     }
 
-    public fun checkFunction(
+    public fun voteProposal<CoinType>(
+        account:&signer,
+        dao_contract_address:address,
+        proposal_id:u64,
+        voteType:bool,//true for "yes"
+        voteCount:u64
+        ) acquires AllProposals,DaoStruct{
+        let addr=signer::address_of(account);
+        let proposals=borrow_global_mut<AllProposals>(dao_contract_address);
+        let length=vector::length(&proposals.all_proposals);
+        //fetch the proposal
+        let proposal=vector::borrow_mut<Proposal>(&mut proposals.all_proposals,proposal_id);        
+        let dao=borrow_global<DaoStruct>(dao_contract_address);
+
+        assert!(coin::is_account_registered<CoinType>(addr),E_INVALID_COIN_TYPE);
+        assert!(length>0,E_NO_PROPOSALS);      
+        assert!(dao.next_proposal_id>proposal_id,E_INVALID_PROPOSAL_Id);
+        //checks the status
+        assert!(proposal.status.Active && !proposal.status.Completed,E_PROPOSAL_NOT_STARTED);
+        //checks the governance token balance
+        let governance_token_balance=coin::balance<CoinType>(addr);
+        assert!(governance_token_balance>dao.governance_token.threshhold,E_THRESHOLD_NOT_MET);
+        voteProposalInternal(proposal,voteCount,voteType,addr);
+
+
+        // total_yes:u64,
+        // total_no:u64,
+        // add_to_yes_vote:Table<address,u64>,
+        // add_to_no_vote:Table<address,u64>,
+
+    }
+    fun voteProposalInternal(proposal:&mut Proposal,voteCount:u64,voteType:bool,addr:address){
+        if(voteType){
+            let isPresent=table::contains(&proposal.stats.add_to_yes_vote,addr);
+            
+            let prevVoteCount=0;
+            if (isPresent) {
+                prevVoteCount=*(table::borrow(&proposal.stats.add_to_yes_vote, addr));
+                
+            };           
+            //Add the vote
+            proposal.stats.total_yes=proposal.stats.total_yes+voteCount;
+            //Add to the table
+            if (isPresent) {
+                table::upsert(&mut proposal.stats.add_to_yes_vote, addr, prevVoteCount + voteCount);
+            } else {
+                table::add(&mut proposal.stats.add_to_yes_vote, addr, voteCount);
+            }
+
+        }else{
+            let isPresent=table::contains(&proposal.stats.add_to_no_vote,addr);
+            let prevVoteCount =0;
+            if (isPresent) {
+                prevVoteCount=*table::borrow(&proposal.stats.add_to_no_vote, addr)
+            } else {
+                prevVoteCount=0;
+            };      
+            //Add the vote
+            proposal.stats.total_no=proposal.stats.total_no+voteCount;
+            //Add to the table
+            if (isPresent) {
+                table::upsert(&mut proposal.stats.add_to_no_vote, addr, prevVoteCount + voteCount);
+            } else {
+                table::add(&mut proposal.stats.add_to_no_vote, addr, voteCount);
+            }          
+        }
+
+
+    }
+
+    public fun executeProposal(account:&signer,dao_contract_address:address) acquires DaoStruct,AllProposals{
+        assert!(exists<DaoStruct>(dao_contract_address),E_DAO_CONTRACT_NOT_EXIST);
+        let dao_contract=borrow_global<DaoStruct>(dao_contract_address);
+        let addr=signer::address_of(account);
+        assert!(dao_contract.admin==addr,E_ONLY_ADMIN);
+        let proposals=borrow_global<AllProposals>(dao_contract_address);
+        let length=vector::length(&(proposals.all_proposals));
+        assert!(length>0,E_NO_PROPOSALS);
+
+    }
+
+    fun checkFunctionForCreateProposal(
         function_name:String,
         map:PropertyMap
         ) {
