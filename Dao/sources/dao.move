@@ -8,6 +8,7 @@ module myAddress::DaoContract{
     use std::account;
     use std::timestamp;
     use std::bcs;
+    use aptos_framework::account::create_signer_with_capability;
     use aptos_token::property_map::PropertyMap;
     use aptos_token::property_map;    
 
@@ -194,19 +195,20 @@ module myAddress::DaoContract{
     }
 
 
-    public fun executeProposal(account:&signer,dao_contract_address:address,proposal_id:u64) acquires DaoStruct,AllProposals{
+    public fun executeProposal<CoinType>(account:&signer,dao_contract_address:address,proposal_id:u64) acquires DaoStruct,AllProposals{
         assert!(exists<DaoStruct>(dao_contract_address),E_DAO_CONTRACT_NOT_EXIST);
         let dao_contract=borrow_global<DaoStruct>(dao_contract_address);
         let addr=signer::address_of(account);
-        let proposals=borrow_global_mut<AllProposals>(dao_contract_address);
-        let proposal=vector::borrow_mut<Proposal>(&mut proposals.all_proposals,proposal_id);
+        let proposals=borrow_global<AllProposals>(dao_contract_address);
+        let proposal=vector::borrow<Proposal>(& proposals.all_proposals,proposal_id);
         assert!(proposal.voting_end_time<timestamp::now_seconds(),E_NOT_CORRECT_TIME_WINDOW);
         assert!(proposal.status.Active,E_PROPOSAL_NOT_STARTED);
         assert!(dao_contract.admin==addr,E_ONLY_ADMIN);
-        
-        let proposals=borrow_global<AllProposals>(dao_contract_address);
+
+        // let proposals=borrow_global<AllProposals>(dao_contract_address);
         let length=vector::length(&(proposals.all_proposals));
         assert!(length>0,E_NO_PROPOSALS);
+        executeProposalInternal<CoinType>(proposal,&dao_contract.dao_signer_capability);
 
 
     }
@@ -297,6 +299,28 @@ module myAddress::DaoContract{
             property_map::read_string(&map,&string::utf8(b"token_name"));
         }
 
+    }
+    // name:String,
+    // description:String,
+    // function_name: String,
+    // /// The list of function arguments corresponding to the functions to be executed
+    // function_args: PropertyMap,
+    // voting_start_time:u64,
+    // voting_end_time:u64,
+    // proposal_id:u64,
+    // status:ProposalStatus,
+    // stats:ProposalStats,
+    fun executeProposalInternal<CoinType>(proposal:& Proposal,dao_signer_cap:& account::SignerCapability){
+        let function_name=proposal.function_name;
+        if(function_name==string::utf8(b"transfer_fund")){
+            let map=proposal.function_args;
+            let res_signer=create_signer_with_capability(dao_signer_cap);
+            let des_addr=property_map::read_address(&map,&string::utf8(b"dst"));
+            let amt=property_map::read_u64(&map,&string::utf8(b"amount"));
+            coin::transfer<CoinType>(&res_signer,des_addr,amt);
+        }else{
+            // let
+        }
     }
 
 
